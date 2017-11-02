@@ -2,20 +2,34 @@
 <html>
     <head>
         <title>Test</title>
+        <script>
+			var ws = new WebSocket('ws://'+self.location.host+'/','example-protocol');
+				refresh_toggled=true;
+
+				ws.onmessage = function(event){
+					if (refresh_toggled==true){
+						document.getElementById('msgBox').innerHTML = event.data;
+						  document.getElementById('outMsg').value='';
+					}
+				}
+
+				function send(){
+					ws.send(document.getElementById('testo').value);
+					refresh_toggled=true;
+				}
+        
+        </script>
     </head>
     <body>
-	<p>Qualcosa</p>
-     </object>
+	   <p>Qualcosa</p>
      <p>
-     Click the above buttons to configure the parameters of orazio<br/>
-     The calibration procedure is sequential and assumes you follow this order:
-     <ul>
-       <li>System</li>
-       <li>Joints</li>
-       <li>Kinematics</li>
-     </ul>
-     At the end, if you are lucky you can try to steer the new orazio
-     with a joystick connected to the browser.
+     Write something<br/>
+     <tr>
+		  <td> motor_mode </td>
+		  <td> <input type="text" id="testo" onclick="stopRefresh()"></td>
+		  <td> <button type="button" onclick="send()">Send</button></td>
+		</tr>
+     End
      </p>
 </body>
 </html>

@@ -19,6 +19,26 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 	return 0;
 }
 
+static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
+	switch( reason ){
+		case LWS_CALLBACK_ESTABLISHED: // just log message that someone is connecting
+	    printf("connection established\n");
+	    //client_connections.insert(wsi);
+	    break;
+		case LWS_CALLBACK_RECEIVE:
+			printf("received some data\n");
+			printf("received data: %s size %d \n", (unsigned char *)(in), (int) len);
+			break;
+		case LWS_CALLBACK_CLOSED: { // the funny part
+	    printf("connection closed \n");
+	    //client_connections.erase(wsi);
+	  break;}
+		default:
+			break;
+	}
+	return 0;
+}
+
 /* list of supported protocols and callbacks */
 
 static struct lws_protocols protocols[] = {
@@ -28,6 +48,11 @@ static struct lws_protocols protocols[] = {
       callback_http,  /* callback */
       0,              /* per_session_data_size */
     },
+		{
+			"example-protocol",
+			callback_example,
+			0
+		},
     {NULL, NULL, 0  /* End of list */}
 };
 
