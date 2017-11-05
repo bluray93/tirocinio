@@ -3,29 +3,29 @@
     <head>
         <title>Test</title>
         <script>
-			var ws = new WebSocket('ws://'+self.location.host+'/','example-protocol');
-				refresh_toggled=true;
-
-				ws.onmessage = function(event){
-					if (refresh_toggled==true){
-						document.getElementById('msgBox').innerHTML = event.data;
-						  document.getElementById('outMsg').value='';
-					}
-				}
+  			var socket = new WebSocket( "ws://" + document.domain + ':' + location.port, "example-protocol" );
+  			refresh_toggled=true;
+        function update(msg) { document.getElementById("num").innerHTML = msg; }
+        socket.onopen = function() { console.log("socket open"); update("open"); }
+        socket.onclose = function() { console.log("socket close"); update("closed"); }
+        socket.onmessage = function(msg) { console.log("socket message: " + msg.data); update(msg.data); }
 
 				function send(){
-					ws.send(document.getElementById('testo').value);
+					socket.send(document.getElementById('testo').value);
 					refresh_toggled=true;
 				}
-        
+
+				function stopRefresh(){
+ 			   	refresh_toggled=false;
+				}
         </script>
     </head>
     <body>
-	   <p>Qualcosa</p>
+	   <p>Show me something</p>
+	   <p id="num"></p>
      <p>
      Write something<br/>
      <tr>
-		  <td> motor_mode </td>
 		  <td> <input type="text" id="testo" onclick="stopRefresh()"></td>
 		  <td> <button type="button" onclick="send()">Send</button></td>
 		</tr>
