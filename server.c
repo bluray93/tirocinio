@@ -1,12 +1,115 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <libwebsockets.h>
 
-#define EXAMPLE_RX_BUFFER_BYTES (32)
-int i=0;
-//static struct lws *web_socket = NULL;
+#define LSH_TOK_BUFSIZE 64
+#define LSH_TOK_DELIM " \t\r\n\a"
+#define EXAMPLE_RX_BUFFER_BYTES 1024
+#define LSH_RL_BUFSIZE 1024
+char *buffer;
+char *outbuf;
+char *builtin_str[]={"cd","help","exit"};
+
+int lsh_cd(char **args);
+int lsh_help(char **args);
+int lsh_exit(char **args);
+
+int (*builtin_func[])(char **)={&lsh_cd,&lsh_help,&lsh_exit};
+
+int lsh_num_builtins(){
+  return sizeof(builtin_str) / sizeof(char *);
+}
+
+int lsh_cd(char **args){
+  if (args[1] == NULL) {
+    strcpy(outbuf,"lsh: expected argument to \"cd\"\n");
+  }
+	else{
+    if (chdir(args[1]) != 0) {
+      perror("lsh");
+    }
+  }
+  return 1;
+}
+
+int lsh_help(char **args){
+  int i;
+  strcpy(outbuf,"Type program names and arguments, and hit enter. \n");
+  strcat(outbuf,"The following are built in: \n");
+  for (i = 0; i < lsh_num_builtins(); i++){
+    strcat(outbuf, builtin_str[i]);
+		strcat(outbuf, " ");
+  }
+  strcat(outbuf,"Use the man command for information on other programs.\n");
+  return 1;
+}
+
+int lsh_exit(char **args){
+  return 0;
+}
+
+int lsh_launch(char **args){
+  pid_t pid;
+  int status;
+  pid = fork();
+  if (pid == 0) {  //child
+    if (execvp(args[0], args) == -1) {
+      perror("lsh");
+    }
+    exit(EXIT_FAILURE);
+  } else if (pid < 0) { //error
+    perror("lsh");
+  } else { //parent
+    do {
+      waitpid(pid, &status, WUNTRACED);
+    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+  }
+  return 1;
+}
+
+int lsh_execute(char **args){
+  int i;
+  if (args[0] == NULL) {
+    return 1;
+  }
+  for (i = 0; i < lsh_num_builtins(); i++) {
+    if (strcmp(args[0], builtin_str[i]) == 0) {
+      return (*builtin_func[i])(args);
+    }
+  }
+  return lsh_launch(args);
+}
+
+char **lsh_split_line(char *line){
+  int bufsize = LSH_TOK_BUFSIZE, position = 0;
+  char **tokens = malloc(bufsize * sizeof(char*));
+  char *token, **tokens_backup;
+  if (!tokens) {
+    fprintf(stderr, "lsh: allocation error\n");
+    exit(EXIT_FAILURE);
+  }
+  token = strtok(line, LSH_TOK_DELIM);
+  while (token != NULL) {
+    tokens[position] = token;
+    position++;
+    if (position >= bufsize) {
+      bufsize += LSH_TOK_BUFSIZE;
+      tokens_backup = tokens;
+      tokens = realloc(tokens, bufsize * sizeof(char*));
+      if (!tokens) {
+		free(tokens_backup);
+        fprintf(stderr, "lsh: allocation error\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+    token = strtok(NULL, LSH_TOK_DELIM);
+  }
+  tokens[position] = NULL;
+  return tokens;
+}
 
 static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
 	switch( reason ){
@@ -21,29 +124,25 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 
 static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
 	switch( reason ){
-		case LWS_CALLBACK_ESTABLISHED:{ // just log message that someone is connecting
+		case LWS_CALLBACK_ESTABLISHED:{
 	    printf("connection established\n");
 			lws_callback_on_writable( wsi );
-			//memcpy(web_socket,wsi);
-			//lws_callback_on_writable_all_protocol( lws_get_context( wsi ), lws_get_protocol( wsi ) );
 	    break;}
 		case LWS_CALLBACK_RECEIVE:
 			printf("received data: %s size %d \n", (unsigned char *)(in), (int) len);
+			strcpy(buffer,(char *)(in));
+			strcat(buffer,"\n");
+	    char ** args = lsh_split_line(buffer);
+	    lsh_execute(args);
+	    free(args);
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
-			unsigned char buf[EXAMPLE_RX_BUFFER_BYTES];
-			memset(buf,0,EXAMPLE_RX_BUFFER_BYTES);
-			strcpy(buf,"Hello! ");
-			char* num=malloc(sizeof(int));
-			sprintf(num,"%d",i);
-			printf("%s\n",num);
-			strcat(buf,num);
-			i++;
-			printf("send p: %s size %d \n", buf, (int)sizeof(buf));
-			lws_write( wsi, buf, EXAMPLE_RX_BUFFER_BYTES, LWS_WRITE_TEXT );
+			printf("send p: %s size %d \n", outbuf, (int)sizeof(outbuf));
+			lws_write( wsi, outbuf, EXAMPLE_RX_BUFFER_BYTES, LWS_WRITE_TEXT );
+			memset(outbuf, 0, EXAMPLE_RX_BUFFER_BYTES);
 			break;}
-		case LWS_CALLBACK_CLOSED: { // the funny part
+		case LWS_CALLBACK_CLOSED: {
 	    printf("connection closed \n");
 	  break;}
 		default:
@@ -54,16 +153,16 @@ static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, 
 
 static struct lws_protocols protocols[] = {
     {
-      "http-only",    /* name */
-      callback_http,  /* callback */
-      0,              /* per_session_data_size */
+      "http-only",
+      callback_http,
+      0,
     },
 		{
 			"example-protocol",
 			callback_example,
 			0
 		},
-    {NULL, NULL, 0  /* End of list */}
+    {NULL, NULL, 0}
 };
 
 enum protocols{
@@ -76,9 +175,7 @@ int main(void) {
     int port = 8000;
     const char *interface = NULL;
     struct lws_context *context;
-    // no special options
     int opts = 0;
-    // create libwebsocket context representing this server
     struct lws_context_creation_info info;
     memset(&info, 0, sizeof info);
     info.port = port;
@@ -94,21 +191,11 @@ int main(void) {
      fprintf(stderr, "lws init failed\n");
      return -1;
     }
-
     printf("starting server...\n");
-    while (1) {
-			/*if(web_socket==NULL)	{
-				struct lws_client_connect_info ccinfo = {0};
-				ccinfo.context = context;
-				ccinfo.address = "localhost";
-				ccinfo.port = 8000;
-				ccinfo.path = "/";
-				ccinfo.host = lws_canonical_hostname( context );
-				ccinfo.origin = "origin";
-				ccinfo.protocol = protocols[PROTOCOL_EXAMPLE].name;
-				web_socket = lws_client_connect_via_info(&ccinfo);
-			}
-			lws_callback_on_writable( web_socket );*/
+		buffer = malloc(sizeof(char) * LSH_RL_BUFSIZE);
+		outbuf = malloc(sizeof(char) * EXAMPLE_RX_BUFFER_BYTES);
+		strcpy(outbuf,"Welcome to websocket terminal\n");
+		while (1) {
 			lws_service(context, 50);
     }
     lws_context_destroy(context);
