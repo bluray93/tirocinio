@@ -7,11 +7,13 @@
 
 #define LSH_TOK_BUFSIZE 64
 #define LSH_TOK_DELIM " \t\r\n\a"
-#define EXAMPLE_RX_BUFFER_BYTES 1024
+#define OUT_BUFFER_SIZE 1024
 #define LSH_RL_BUFSIZE 1024
 char *buffer;
 char *outbuf;
 char *builtin_str[]={"cd","help","exit"};
+int filedes[2];
+int func=0;
 
 int lsh_cd(char **args);
 int lsh_help(char **args);
@@ -24,6 +26,7 @@ int lsh_num_builtins(){
 }
 
 int lsh_cd(char **args){
+  printf("cd function\n");
   if (args[1] == NULL) {
     strcpy(outbuf,"lsh: expected argument to \"cd\"\n");
   }
@@ -52,10 +55,19 @@ int lsh_exit(char **args){
 }
 
 int lsh_launch(char **args){
+  printf("launch function\n");
+  func=1;
   pid_t pid;
   int status;
+  if (pipe(filedes) == -1) {
+    perror("pipe");
+    exit(1);
+  }
   pid = fork();
   if (pid == 0) {  //child
+    while ((dup2(filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
+    close(filedes[1]);
+    close(filedes[0]);
     if (execvp(args[0], args) == -1) {
       perror("lsh");
     }
@@ -64,6 +76,7 @@ int lsh_launch(char **args){
     perror("lsh");
   } else { //parent
     do {
+      close(filedes[1]);
       waitpid(pid, &status, WUNTRACED);
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
@@ -111,6 +124,25 @@ char **lsh_split_line(char *line){
   return tokens;
 }
 
+void pipe_to_buff(){
+  printf("pipe function\n");
+  while (1) {
+    ssize_t count = read(filedes[0], outbuf, OUT_BUFFER_SIZE);
+    if (count == -1) {
+      if (errno == EINTR) {
+        continue;
+      } else {
+        perror("read");
+        exit(1);
+      }
+    } else if (count == 0) {
+      break;
+    }
+  }
+  close(filedes[0]);
+  func =0;
+}
+
 static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
 	switch( reason ){
 		case LWS_CALLBACK_HTTP:
@@ -138,9 +170,11 @@ static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, 
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
-			printf("send p: %s size %d \n", outbuf, (int)sizeof(outbuf));
-			lws_write( wsi, outbuf, EXAMPLE_RX_BUFFER_BYTES, LWS_WRITE_TEXT );
-			memset(outbuf, 0, EXAMPLE_RX_BUFFER_BYTES);
+      //wait(0);
+      if(func==1) pipe_to_buff();
+			printf("send outbuf: %s size %d \n", outbuf, sizeof(outbuf));
+			lws_write( wsi, outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT );
+			memset(outbuf, 0, OUT_BUFFER_SIZE);
 			break;}
 		case LWS_CALLBACK_CLOSED: {
 	    printf("connection closed \n");
@@ -193,7 +227,7 @@ int main(void) {
     }
     printf("starting server...\n");
 		buffer = malloc(sizeof(char) * LSH_RL_BUFSIZE);
-		outbuf = malloc(sizeof(char) * EXAMPLE_RX_BUFFER_BYTES);
+		outbuf = malloc(sizeof(char) * OUT_BUFFER_SIZE);
 		strcpy(outbuf,"Welcome to websocket terminal\n");
 		while (1) {
 			lws_service(context, 50);
