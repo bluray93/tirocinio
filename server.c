@@ -13,6 +13,7 @@ char *buffer;
 char *outbuf;
 char *builtin_str[]={"cd","help","exit"};
 int filedes[2];
+//int errordes[2];
 int func=0;
 
 int lsh_cd(char **args);
@@ -32,7 +33,7 @@ int lsh_cd(char **args){
   }
 	else{
     if (chdir(args[1]) != 0) {
-      perror("lsh");
+      strcpy(outbuf,"No such file or directory");
     }
   }
   return 1;
@@ -66,8 +67,11 @@ int lsh_launch(char **args){
   pid = fork();
   if (pid == 0) {  //child
     while ((dup2(filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
-    close(filedes[1]);
+    //while ((dup2(errordes[1], STDERR_FILENO) == -1) && (errno == EINTR)) {}
     close(filedes[0]);
+    close(filedes[1]);
+    //close(errordes[0]);
+    //close(errordes[1]);
     if (execvp(args[0], args) == -1) {
       perror("lsh");
     }
@@ -127,6 +131,7 @@ char **lsh_split_line(char *line){
 void pipe_to_buff(){
   printf("pipe function\n");
   while (1) {
+    //ssize_t count = read(filedes[0], outbuf, OUT_BUFFER_SIZE);
     ssize_t count = read(filedes[0], outbuf, OUT_BUFFER_SIZE);
     if (count == -1) {
       if (errno == EINTR) {
@@ -170,7 +175,6 @@ static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, 
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
-      //wait(0);
       if(func==1) pipe_to_buff();
 			printf("send outbuf: %s size %d \n", outbuf, sizeof(outbuf));
 			lws_write( wsi, outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT );
