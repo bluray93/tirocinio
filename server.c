@@ -3,18 +3,25 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <pthread.h> //for threading , link with lpthread
 #include <libwebsockets.h>
 
 #define LSH_TOK_BUFSIZE 64
 #define LSH_TOK_DELIM " \t\r\n\a"
 #define OUT_BUFFER_SIZE 1024
 #define LSH_RL_BUFSIZE 1024
+#define THREAD_NUM 24
 char *buffer;
 char *outbuf;
 char *builtin_str[]={"cd","help","exit"};
 int filedes[2];
-//int errordes[2];
 int func=0;
+struct lws_context* context[THREAD_NUM];
+
+typedef struct session_thread_args_s {
+    int i;
+    void * info;
+} session_thread_args_t;
 
 int lsh_cd(char **args);
 int lsh_help(char **args);
@@ -67,11 +74,8 @@ int lsh_launch(char **args){
   pid = fork();
   if (pid == 0) {  //child
     while ((dup2(filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
-    //while ((dup2(errordes[1], STDERR_FILENO) == -1) && (errno == EINTR)) {}
     close(filedes[0]);
     close(filedes[1]);
-    //close(errordes[0]);
-    //close(errordes[1]);
     if (execvp(args[0], args) == -1) {
       perror("lsh");
     }
@@ -131,7 +135,6 @@ char **lsh_split_line(char *line){
 void pipe_to_buff(){
   printf("pipe function\n");
   while (1) {
-    //ssize_t count = read(filedes[0], outbuf, OUT_BUFFER_SIZE);
     ssize_t count = read(filedes[0], outbuf, OUT_BUFFER_SIZE);
     if (count == -1) {
       if (errno == EINTR) {
@@ -208,34 +211,71 @@ enum protocols{
 	PROTOCOL_COUNT
 };
 
+static int context_create(void *arg){
+  printf("context_create\n");
+  session_thread_args_t* args = (session_thread_args_t*)arg;
+  int i = args->i;
+  void* info = args->info;
+  context[i] = lws_create_context(info);
+  if (context == NULL) {
+   fprintf(stderr, "lws init failed\n");
+   return -1;
+  }
+  printf("starting server...\n");
+  strcpy(outbuf,"Welcome to websocket terminal\n");
+  while (1) {
+    lws_service(context[i], 50);
+  }
+  lws_context_destroy(context[i]);
+}
+
 int main(void) {
-    // server url will be http://localhost:8000
-    int port = 8000;
-    const char *interface = NULL;
-    struct lws_context *context;
-    int opts = 0;
-    struct lws_context_creation_info info;
-    memset(&info, 0, sizeof info);
-    info.port = port;
-    info.iface = interface;
-    info.protocols = protocols;
-    info.ssl_cert_filepath = NULL;
-    info.ssl_private_key_filepath = NULL;
-    info.gid = -1;
-    info.uid = -1;
-    info.options = opts;
-    context = lws_create_context(&info);
-    if (context == NULL) {
-     fprintf(stderr, "lws init failed\n");
-     return -1;
-    }
-    printf("starting server...\n");
-		buffer = malloc(sizeof(char) * LSH_RL_BUFSIZE);
-		outbuf = malloc(sizeof(char) * OUT_BUFFER_SIZE);
-		strcpy(outbuf,"Welcome to websocket terminal\n");
-		while (1) {
-			lws_service(context, 50);
-    }
-    lws_context_destroy(context);
-    return 0;
+  // server url will be http://localhost:8000
+  int port = 8000;
+  const char *interface = NULL;
+  int opts = 0;
+  struct lws_context_creation_info info;
+  memset(&info, 0, sizeof info);
+  info.port = port;
+  info.iface = interface;
+  info.protocols = protocols;
+  info.ssl_cert_filepath = NULL;
+  info.ssl_private_key_filepath = NULL;
+  info.gid = -1;
+  info.uid = -1;
+  info.options = opts;
+  int i=0;
+  buffer = malloc(sizeof(char) * LSH_RL_BUFSIZE);
+  outbuf = malloc(sizeof(char) * OUT_BUFFER_SIZE);
+  //printf("qualcosa\n");
+  pthread_t client_thread;
+  //pthread_t client2_thread;
+
+  session_thread_args_t* args1 = (session_thread_args_t*)malloc(sizeof(session_thread_args_t));
+  args1->i = i;
+  args1->info = &info;
+
+
+  if(pthread_create( &client_thread , NULL ,  context_create , args1)){
+    perror("could not create thread");
+    return 1;
+  }
+
+  /*i=1;
+  session_thread_args_t* args2 = (session_thread_args_t*)malloc(sizeof(session_thread_args_t));
+  args2->i = i;
+  args2->info = &info;
+  if(pthread_create( &client2_thread , NULL ,  context_create , args2)){
+    perror("could not create thread");
+    return 1;
+  }*/
+
+  if(pthread_join(&client_thread, NULL)) {
+    fprintf(stderr, "Error joining thread\n");
+  }
+  /*if(pthread_join(&client2_thread, NULL)) {
+    fprintf(stderr, "Error joining thread\n");
+  }*/
+
+  return 0;
 }
