@@ -3,7 +3,8 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-//#include <pthread.h> //for threading , link with lpthread
+#include <pthread.h> //for threading , link with lpthread
+#include <semaphore.h>
 #include <libwebsockets.h>
 
 #define LSH_TOK_BUFSIZE 64
@@ -17,12 +18,13 @@ typedef struct clients_s {
   char inbuf[IN_BUFFER_SIZE];
   char outbuf[OUT_BUFFER_SIZE];
   int filedes[2];
-  struct  clients_s* next;
+  struct  clients_t* next;
 } clients_t;
 
 char *builtin_str[]={"cd","help","exit"};
-int func=0; //WTF
-//char buffer = calloc(IN_BUFFER_SIZE, sizeof(char)); //semafori per buffer
+int func=0; //used to send welcome message
+sem_t client_data_sem;
+sem_t empty_sem;
 clients_t* clients = NULL;
 
 int lsh_cd(char **args, clients_t* aux);
@@ -45,6 +47,7 @@ int lsh_cd(char **args, clients_t* aux){
       strcpy(aux->outbuf,"No such file or directory");
     }
   }
+  sem_post(&empty_sem);
   return 1;
 }
 
@@ -57,10 +60,12 @@ int lsh_help(char **args, clients_t* aux){
 		strcat(aux->outbuf, " ");
   }
   strcat(aux->outbuf,"Use the man command for information on other programs.\n");
+  sem_post(&empty_sem);
   return 1;
 }
 
 int lsh_exit(char **args, clients_t* aux){ //incompleta (invece di chiudere il programma ristrutturare la lista)
+  sem_post(&empty_sem);
   return 0;
 }
 
@@ -87,9 +92,11 @@ int lsh_launch(char **args, clients_t* aux){
   } else { //parent
     do {
       close(aux->filedes[1]);
-      waitpid(pid, &status, WUNTRACED);
+      //waitpid(pid, &status, WUNTRACED);
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
+  printf("post\n");
+  sem_post(&empty_sem);
   return 1;
 }
 
@@ -136,6 +143,8 @@ char **lsh_split_line(char *line){
 
 void pipe_to_buff(clients_t* aux){
   //printf("pipe function\n");
+  printf("wait\n");
+  sem_wait(&empty_sem);
   while (1) {
     ssize_t count = read(aux->filedes[0], aux->outbuf, OUT_BUFFER_SIZE);
     if (count == -1) {
@@ -150,7 +159,9 @@ void pipe_to_buff(clients_t* aux){
     }
   }
   close(aux->filedes[0]);
-  func =0;
+  //func =0;
+  printf("post\n");
+  sem_post(&empty_sem);
 }
 
 struct client_t* clients_func(struct lws* wsi){
@@ -159,7 +170,7 @@ struct client_t* clients_func(struct lws* wsi){
     clients = (clients_t*)calloc(1,sizeof(clients_t));
     clients -> client = wsi;
     clients -> next =NULL;
-    strcpy(clients->outbuf,"Welcome to websocket terminal\n");
+    strcpy((clients->outbuf),"Welcome to websocket terminal\n");
     return clients;
   }
   else{
@@ -173,9 +184,19 @@ struct client_t* clients_func(struct lws* wsi){
     aux=aux->next;
     aux -> client = wsi;
     aux -> next =NULL;
-    strcpy(clients->outbuf,"Welcome to websocket terminal\n");
+    strcpy((clients->outbuf),"Welcome to websocket terminal\n");
     return aux;
   }
+}
+
+void thread_func(void* args) {
+  //session_thread_args_t* arg = (session_thread_args_t*)args;
+  printf("thread\n");
+  clients_t* aux = (clients_t*)args;
+  char ** tmp = lsh_split_line(aux->inbuf);
+  lsh_execute(tmp,aux);
+  free(tmp);
+  pthread_exit(NULL);
 }
 
 static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
@@ -190,7 +211,10 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 }
 
 static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
+  //sem_wait(&client_data_sem);
   clients_t* aux = clients_func(wsi);
+  //sem_post(&client_data_sem);
+  int ret;
   switch( reason ){
 		case LWS_CALLBACK_ESTABLISHED:{
 	    printf("connection established\n");
@@ -200,11 +224,14 @@ static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, 
 			printf("received data: %s size %d \n", (unsigned char *)(in), (int) len);
 			strcpy((aux->inbuf),(char *)(in));
 			strcat((aux->inbuf),"\0");
-      //strcpy((aux->inbuf),buffer);
-      //memset(buffer,0,IN_BUFFER_SIZE);
-	    char ** args = lsh_split_line(aux->inbuf);
-	    lsh_execute(args,aux);
-	    free(args);
+      pthread_t thread;
+      printf("wait1\n");
+      sem_wait(&empty_sem);
+      printf("before create\n");
+      ret = pthread_create(&thread, NULL, thread_func, (void*)aux);
+      //ERROR_HELPER(ret, "Errore nella creazione di broadcast_thread");
+      ret = pthread_detach(thread);
+      //ERROR_HELPER(ret, "Errore nel detach di broadcast_thread");
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
@@ -249,6 +276,8 @@ int main(void) {
   int opts = 0;
   struct lws_context_creation_info info;
   struct lws_context* context;
+  sem_init(&client_data_sem,0,1);
+  sem_init(&empty_sem,0,1);
   memset(&info, 0, sizeof info);
   info.port = port;
   info.iface = interface;
@@ -258,14 +287,12 @@ int main(void) {
   info.gid = -1;
   info.uid = -1;
   info.options = opts;
-
   context = lws_create_context(&info);
   if (context == NULL) {
    fprintf(stderr, "lws init failed\n");
    return -1;
   }
   printf("starting server...\n");
-
   while (1) {
     lws_service(context, 50);
   }
