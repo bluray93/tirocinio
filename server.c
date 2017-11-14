@@ -3,79 +3,81 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <pthread.h> //for threading , link with lpthread
+//#include <pthread.h> //for threading , link with lpthread
 #include <libwebsockets.h>
 
 #define LSH_TOK_BUFSIZE 64
 #define LSH_TOK_DELIM " \t\r\n\a"
 #define OUT_BUFFER_SIZE 1024
-#define LSH_RL_BUFSIZE 1024
-#define THREAD_NUM 24
-char *buffer;
-char *outbuf;
+#define IN_BUFFER_SIZE 1024
+#define CLIENT_NUM 24
+
+typedef struct clients_s {
+  struct lws* client;
+  char inbuf[IN_BUFFER_SIZE];
+  char outbuf[OUT_BUFFER_SIZE];
+  int filedes[2];
+  struct  clients_s* next;
+} clients_t;
+
 char *builtin_str[]={"cd","help","exit"};
-int filedes[2];
-int func=0;
-struct lws_context* context[THREAD_NUM];
+int func=0; //WTF
+//char buffer = calloc(IN_BUFFER_SIZE, sizeof(char)); //semafori per buffer
+clients_t* clients = NULL;
 
-typedef struct session_thread_args_s {
-    int i;
-    void * info;
-} session_thread_args_t;
+int lsh_cd(char **args, clients_t* aux);
+int lsh_help(char **args, clients_t* aux);
+int lsh_exit(char **args, clients_t* aux);
 
-int lsh_cd(char **args);
-int lsh_help(char **args);
-int lsh_exit(char **args);
-
-int (*builtin_func[])(char **)={&lsh_cd,&lsh_help,&lsh_exit};
+int (*builtin_func[])(char **,clients_t*)={&lsh_cd,&lsh_help,&lsh_exit};
 
 int lsh_num_builtins(){
   return sizeof(builtin_str) / sizeof(char *);
 }
 
-int lsh_cd(char **args){
+int lsh_cd(char **args, clients_t* aux){
   printf("cd function\n");
   if (args[1] == NULL) {
-    strcpy(outbuf,"lsh: expected argument to \"cd\"\n");
+    strcpy(aux->outbuf,"lsh: expected argument to \"cd\"\n");
   }
 	else{
     if (chdir(args[1]) != 0) {
-      strcpy(outbuf,"No such file or directory");
+      strcpy(aux->outbuf,"No such file or directory");
     }
   }
   return 1;
 }
 
-int lsh_help(char **args){
+int lsh_help(char **args, clients_t* aux){
   int i;
-  strcpy(outbuf,"Type program names and arguments, and hit enter. \n");
-  strcat(outbuf,"The following are built in: \n");
+  strcpy(aux->outbuf,"Type program names and arguments, and hit enter. \n");
+  strcat(aux->outbuf,"The following are built in: \n");
   for (i = 0; i < lsh_num_builtins(); i++){
-    strcat(outbuf, builtin_str[i]);
-		strcat(outbuf, " ");
+    strcat(aux->outbuf, builtin_str[i]);
+		strcat(aux->outbuf, " ");
   }
-  strcat(outbuf,"Use the man command for information on other programs.\n");
+  strcat(aux->outbuf,"Use the man command for information on other programs.\n");
   return 1;
 }
 
-int lsh_exit(char **args){
+int lsh_exit(char **args, clients_t* aux){ //incompleta (invece di chiudere il programma ristrutturare la lista)
   return 0;
 }
 
-int lsh_launch(char **args){
+int lsh_launch(char **args, clients_t* aux){
   printf("launch function\n");
   func=1;
   pid_t pid;
   int status;
-  if (pipe(filedes) == -1) {
+  if (pipe(aux->filedes) == -1) {
     perror("pipe");
     exit(1);
   }
   pid = fork();
   if (pid == 0) {  //child
-    while ((dup2(filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
-    close(filedes[0]);
-    close(filedes[1]);
+    while ((dup2(aux->filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
+    close(aux->filedes[0]);
+    close(aux->filedes[1]);
     if (execvp(args[0], args) == -1) {
       perror("lsh");
     }
@@ -84,28 +86,28 @@ int lsh_launch(char **args){
     perror("lsh");
   } else { //parent
     do {
-      close(filedes[1]);
+      close(aux->filedes[1]);
       waitpid(pid, &status, WUNTRACED);
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
   return 1;
 }
 
-int lsh_execute(char **args){
+int lsh_execute(char **args,clients_t* aux){
   int i;
   if (args[0] == NULL) {
     return 1;
   }
   for (i = 0; i < lsh_num_builtins(); i++) {
     if (strcmp(args[0], builtin_str[i]) == 0) {
-      return (*builtin_func[i])(args);
+      return (*builtin_func[i])(args, aux);
     }
   }
-  return lsh_launch(args);
+  return lsh_launch(args,aux);
 }
 
 char **lsh_split_line(char *line){
-  int bufsize = LSH_TOK_BUFSIZE, position = 0;
+  int bufsize = IN_BUFFER_SIZE, position = 0;
   char **tokens = malloc(bufsize * sizeof(char*));
   char *token, **tokens_backup;
   if (!tokens) {
@@ -132,10 +134,10 @@ char **lsh_split_line(char *line){
   return tokens;
 }
 
-void pipe_to_buff(){
-  printf("pipe function\n");
+void pipe_to_buff(clients_t* aux){
+  //printf("pipe function\n");
   while (1) {
-    ssize_t count = read(filedes[0], outbuf, OUT_BUFFER_SIZE);
+    ssize_t count = read(aux->filedes[0], aux->outbuf, OUT_BUFFER_SIZE);
     if (count == -1) {
       if (errno == EINTR) {
         continue;
@@ -147,12 +149,37 @@ void pipe_to_buff(){
       break;
     }
   }
-  close(filedes[0]);
+  close(aux->filedes[0]);
   func =0;
 }
 
+struct client_t* clients_func(struct lws* wsi){
+  clients_t* aux = clients;
+  if( clients == NULL){
+    clients = (clients_t*)calloc(1,sizeof(clients_t));
+    clients -> client = wsi;
+    clients -> next =NULL;
+    strcpy(clients->outbuf,"Welcome to websocket terminal\n");
+    return clients;
+  }
+  else{
+    while((aux-> next)!=NULL){
+      if((aux->client)==wsi){
+        return aux;
+      }
+      aux=aux->next;
+    }
+    aux->next=(clients_t*)malloc(sizeof(clients_t));
+    aux=aux->next;
+    aux -> client = wsi;
+    aux -> next =NULL;
+    strcpy(clients->outbuf,"Welcome to websocket terminal\n");
+    return aux;
+  }
+}
+
 static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
-	switch( reason ){
+  switch( reason ){
 		case LWS_CALLBACK_HTTP:
 			lws_serve_http_file( wsi, "index.html", "text/html", NULL, 0 );
 			break;
@@ -162,26 +189,29 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 	return 0;
 }
 
-static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
-	switch( reason ){
+static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
+  clients_t* aux = clients_func(wsi);
+  switch( reason ){
 		case LWS_CALLBACK_ESTABLISHED:{
 	    printf("connection established\n");
 			lws_callback_on_writable( wsi );
 	    break;}
 		case LWS_CALLBACK_RECEIVE:
 			printf("received data: %s size %d \n", (unsigned char *)(in), (int) len);
-			strcpy(buffer,(char *)(in));
-			strcat(buffer,"\n");
-	    char ** args = lsh_split_line(buffer);
-	    lsh_execute(args);
+			strcpy((aux->inbuf),(char *)(in));
+			strcat((aux->inbuf),"\0");
+      //strcpy((aux->inbuf),buffer);
+      //memset(buffer,0,IN_BUFFER_SIZE);
+	    char ** args = lsh_split_line(aux->inbuf);
+	    lsh_execute(args,aux);
 	    free(args);
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
-      if(func==1) pipe_to_buff();
-			printf("send outbuf: %s size %d \n", outbuf, sizeof(outbuf));
-			lws_write( wsi, outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT );
-			memset(outbuf, 0, OUT_BUFFER_SIZE);
+      if(func==1) pipe_to_buff(aux);
+			printf("send outbuf: %s\n", aux->outbuf);
+			lws_write( aux->client, aux->outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT ); //add LWS_PRE to buffer
+			memset(aux->outbuf, 0, OUT_BUFFER_SIZE);
 			break;}
 		case LWS_CALLBACK_CLOSED: {
 	    printf("connection closed \n");
@@ -189,6 +219,7 @@ static int callback_example( struct lws *wsi, enum lws_callback_reasons reason, 
 		default:
 			break;
 	}
+
 	return 0;
 }
 
@@ -211,30 +242,13 @@ enum protocols{
 	PROTOCOL_COUNT
 };
 
-static int context_create(void *arg){
-  printf("context_create\n");
-  session_thread_args_t* args = (session_thread_args_t*)arg;
-  int i = args->i;
-  void* info = args->info;
-  context[i] = lws_create_context(info);
-  if (context == NULL) {
-   fprintf(stderr, "lws init failed\n");
-   return -1;
-  }
-  printf("starting server...\n");
-  strcpy(outbuf,"Welcome to websocket terminal\n");
-  while (1) {
-    lws_service(context[i], 50);
-  }
-  lws_context_destroy(context[i]);
-}
-
 int main(void) {
   // server url will be http://localhost:8000
   int port = 8000;
   const char *interface = NULL;
   int opts = 0;
   struct lws_context_creation_info info;
+  struct lws_context* context;
   memset(&info, 0, sizeof info);
   info.port = port;
   info.iface = interface;
@@ -244,38 +258,17 @@ int main(void) {
   info.gid = -1;
   info.uid = -1;
   info.options = opts;
-  int i=0;
-  buffer = malloc(sizeof(char) * LSH_RL_BUFSIZE);
-  outbuf = malloc(sizeof(char) * OUT_BUFFER_SIZE);
-  //printf("qualcosa\n");
-  pthread_t client_thread;
-  //pthread_t client2_thread;
 
-  session_thread_args_t* args1 = (session_thread_args_t*)malloc(sizeof(session_thread_args_t));
-  args1->i = i;
-  args1->info = &info;
-
-
-  if(pthread_create( &client_thread , NULL ,  context_create , args1)){
-    perror("could not create thread");
-    return 1;
+  context = lws_create_context(&info);
+  if (context == NULL) {
+   fprintf(stderr, "lws init failed\n");
+   return -1;
   }
+  printf("starting server...\n");
 
-  /*i=1;
-  session_thread_args_t* args2 = (session_thread_args_t*)malloc(sizeof(session_thread_args_t));
-  args2->i = i;
-  args2->info = &info;
-  if(pthread_create( &client2_thread , NULL ,  context_create , args2)){
-    perror("could not create thread");
-    return 1;
-  }*/
-
-  if(pthread_join(&client_thread, NULL)) {
-    fprintf(stderr, "Error joining thread\n");
+  while (1) {
+    lws_service(context, 50);
   }
-  /*if(pthread_join(&client2_thread, NULL)) {
-    fprintf(stderr, "Error joining thread\n");
-  }*/
-
+  lws_context_destroy(context);
   return 0;
 }
