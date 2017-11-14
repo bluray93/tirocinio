@@ -101,6 +101,7 @@ int lsh_launch(char **args, clients_t* aux){
 }
 
 int lsh_execute(char **args,clients_t* aux){
+  printf("execute\n");
   int i;
   if (args[0] == NULL) {
     return 1;
@@ -110,6 +111,7 @@ int lsh_execute(char **args,clients_t* aux){
       return (*builtin_func[i])(args, aux);
     }
   }
+  printf("altro\n");
   return lsh_launch(args,aux);
 }
 
@@ -143,8 +145,8 @@ char **lsh_split_line(char *line){
 
 void pipe_to_buff(clients_t* aux){
   //printf("pipe function\n");
-  printf("wait\n");
-  sem_wait(&empty_sem);
+  //printf("wait\n");
+  //sem_wait(&empty_sem);
   while (1) {
     ssize_t count = read(aux->filedes[0], aux->outbuf, OUT_BUFFER_SIZE);
     if (count == -1) {
@@ -160,8 +162,8 @@ void pipe_to_buff(clients_t* aux){
   }
   close(aux->filedes[0]);
   //func =0;
-  printf("post\n");
-  sem_post(&empty_sem);
+  //printf("post\n");
+  //sem_post(&empty_sem);
 }
 
 struct client_t* clients_func(struct lws* wsi){
@@ -170,7 +172,7 @@ struct client_t* clients_func(struct lws* wsi){
     clients = (clients_t*)calloc(1,sizeof(clients_t));
     clients -> client = wsi;
     clients -> next =NULL;
-    strcpy((clients->outbuf),"Welcome to websocket terminal\n");
+    strcpy((clients->outbuf),"Welcome to websocket terminal\0");
     return clients;
   }
   else{
@@ -184,7 +186,7 @@ struct client_t* clients_func(struct lws* wsi){
     aux=aux->next;
     aux -> client = wsi;
     aux -> next =NULL;
-    strcpy((clients->outbuf),"Welcome to websocket terminal\n");
+    strcpy((clients->outbuf),"Welcome to websocket terminal\0");
     return aux;
   }
 }
@@ -221,24 +223,26 @@ static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, 
 			lws_callback_on_writable( wsi );
 	    break;}
 		case LWS_CALLBACK_RECEIVE:
+      sem_wait(&empty_sem);
 			printf("received data: %s size %d \n", (unsigned char *)(in), (int) len);
 			strcpy((aux->inbuf),(char *)(in));
 			strcat((aux->inbuf),"\0");
       pthread_t thread;
-      printf("wait1\n");
-      sem_wait(&empty_sem);
       printf("before create\n");
       ret = pthread_create(&thread, NULL, thread_func, (void*)aux);
-      //ERROR_HELPER(ret, "Errore nella creazione di broadcast_thread");
       ret = pthread_detach(thread);
-      //ERROR_HELPER(ret, "Errore nel detach di broadcast_thread");
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
+      printf("wait\n");
+      sem_wait(&empty_sem);
       if(func==1) pipe_to_buff(aux);
+      printf("%s\n", aux->outbuf);
 			printf("send outbuf: %s\n", aux->outbuf);
 			lws_write( aux->client, aux->outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT ); //add LWS_PRE to buffer
 			memset(aux->outbuf, 0, OUT_BUFFER_SIZE);
+      printf("post\n");
+      sem_post(&empty_sem);
 			break;}
 		case LWS_CALLBACK_CLOSED: {
 	    printf("connection closed \n");
