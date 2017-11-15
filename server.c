@@ -161,7 +161,7 @@ void pipe_to_buff(clients_t* aux){
     }
   }
   close(aux->filedes[0]);
-  //func =0;
+  func =0;
   //printf("post\n");
   //sem_post(&empty_sem);
 }
