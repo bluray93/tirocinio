@@ -65,6 +65,21 @@ int lsh_help(char **args, clients_t* aux){
 }
 
 int lsh_exit(char **args, clients_t* aux){ //incompleta (invece di chiudere il programma ristrutturare la lista)
+  clients_t* aus = clients;
+  clients_t* aus2 = clients;
+  if(clients->client==aux->client){
+    clients=clients->next;
+    free(aus);
+  }
+  else{
+    while(aus->next!=NULL){
+      aus2=aus->next;
+      if(aus2->client==aux->client){
+        aus->next=aus2->next;
+        free(aus2);
+      }
+    }
+  }
   sem_post(&empty_sem);
   return 0;
 }
@@ -216,7 +231,6 @@ static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, 
   //sem_wait(&client_data_sem);
   clients_t* aux = clients_func(wsi);
   //sem_post(&client_data_sem);
-  int ret;
   switch( reason ){
 		case LWS_CALLBACK_ESTABLISHED:{
 	    printf("connection established\n");
@@ -229,8 +243,8 @@ static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, 
 			strcat((aux->inbuf),"\0");
       pthread_t thread;
       printf("before create\n");
-      ret = pthread_create(&thread, NULL, thread_func, (void*)aux);
-      ret = pthread_detach(thread);
+      pthread_create(&thread, NULL, thread_func, (void*)aux);
+      pthread_detach(thread);
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
@@ -245,12 +259,12 @@ static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, 
       sem_post(&empty_sem);
 			break;}
 		case LWS_CALLBACK_CLOSED: {
+      lsh_exit(NULL,aux);
 	    printf("connection closed \n");
 	  break;}
 		default:
 			break;
 	}
-
 	return 0;
 }
 
