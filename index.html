@@ -4,30 +4,24 @@
         <title>Test</title>
         <script>
   			var socket = new WebSocket( "ws://" + document.domain + ':' + location.port, "example-protocol" );
-  			refresh_toggled=true;
-        function update(msg) { document.getElementById("num").innerHTML = msg; }
+        function update(msg) { document.getElementById("data").innerHTML = msg; }
         socket.onopen = function() { console.log("socket open"); update("open"); }
         socket.onclose = function() { console.log("socket close"); update("closed"); }
         socket.onmessage = function(msg) { console.log("socket message: " + msg.data); update(msg.data); }
 
 				function send(){
 					socket.send(document.getElementById('testo').value);
-					refresh_toggled=true;
-				}
-
-				function stopRefresh(){
- 			   	refresh_toggled=false;
 				}
         </script>
     </head>
     <body>
 	  Write command<br/>
      <tr>
-		  <td> <input type="text" id="testo" onclick="stopRefresh()"></td>
+		  <td> <input type="text" id="testo"></td>
 		  <td> <button type="button" onclick="send()">Send</button></td>
 		</tr>
     <p>Response</p>
-    <p id="num"></p>
+    <p id="data"></p>
     <p>
 </body>
 </html>
