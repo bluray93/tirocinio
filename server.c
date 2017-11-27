@@ -12,6 +12,7 @@
 #define OUT_BUFFER_SIZE LWS_SEND_BUFFER_PRE_PADDING + 1024 + LWS_SEND_BUFFER_POST_PADDING
 #define IN_BUFFER_SIZE LWS_SEND_BUFFER_PRE_PADDING + 1024 + LWS_SEND_BUFFER_POST_PADDING
 #define CLIENT_NUM 24
+#define DIR_BUFFER_SIZE 256
 
 typedef struct {
   struct lws* client;
@@ -26,6 +27,7 @@ int func=0; //used to send welcome message
 sem_t client_data_sem;
 sem_t empty_sem;
 clients_t* clients = NULL;
+char* cdir;
 
 int lsh_cd(char **args, clients_t* aux);
 int lsh_help(char **args, clients_t* aux);
@@ -85,7 +87,6 @@ int lsh_exit(char **args, clients_t* aux){
 }
 
 int lsh_launch(char **args, clients_t* aux){
-  printf("launch function\n");
   func=1;
   pid_t pid;
   int status;
@@ -110,13 +111,11 @@ int lsh_launch(char **args, clients_t* aux){
       //waitpid(pid, &status, WUNTRACED);
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
-  printf("post\n");
   sem_post(&empty_sem);
   return 1;
 }
 
 int lsh_execute(char **args,clients_t* aux){
-  printf("execute\n");
   int i;
   if (args[0] == NULL) {
     return 1;
@@ -126,7 +125,6 @@ int lsh_execute(char **args,clients_t* aux){
       return (*builtin_func[i])(args, aux);
     }
   }
-  printf("altro\n");
   return lsh_launch(args,aux);
 }
 
@@ -159,9 +157,6 @@ char **lsh_split_line(char *line){
 }
 
 void pipe_to_buff(clients_t* aux){
-  //printf("pipe function\n");
-  //printf("wait\n");
-  //sem_wait(&empty_sem);
   while (1) {
     ssize_t count = read(aux->filedes[0], aux->outbuf, OUT_BUFFER_SIZE);
     if (count == -1) {
@@ -177,8 +172,6 @@ void pipe_to_buff(clients_t* aux){
   }
   close(aux->filedes[0]);
   func =0;
-  //printf("post\n");
-  //sem_post(&empty_sem);
 }
 
 struct client_t* clients_func(struct lws* wsi){
@@ -205,7 +198,6 @@ struct client_t* clients_func(struct lws* wsi){
 }
 
 void thread_func(void* args) {
-  printf("thread\n");
   clients_t* aux = (clients_t*)args;
   char ** tmp = lsh_split_line(aux->inbuf);
   lsh_execute(tmp,aux);
@@ -216,6 +208,7 @@ void thread_func(void* args) {
 static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
   switch( reason ){
 		case LWS_CALLBACK_HTTP:
+      chdir(cdir);
 			lws_serve_http_file( wsi, "index.html", "text/html", NULL, 0 );
 			break;
 		default:
@@ -289,6 +282,8 @@ int main(void) {
   int port = 8000;
   const char *interface = NULL;
   int opts = 0;
+  cdir = malloc(DIR_BUFFER_SIZE*sizeof(char));
+  getcwd(cdir,DIR_BUFFER_SIZE);
   struct lws_context_creation_info info;
   struct lws_context* context;
   sem_init(&client_data_sem,0,1);
