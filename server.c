@@ -24,7 +24,7 @@ typedef struct {
 } clients_t;
 
 char *builtin_str[]={"cd","help","exit"};
-int func=0; //used to send welcome message
+int func=0; //still make sense?
 sem_t client_data_sem;
 sem_t empty_sem;
 clients_t* clients = NULL;
@@ -70,6 +70,7 @@ int lsh_help(char **args, clients_t* aux){
 }
 
 int lsh_exit(char **args, clients_t* aux){
+  sem_wait(&client_data_sem);
   clients_t* aus = clients;
   clients_t* aus2 = clients;
   if(clients->client==aux->client){
@@ -85,6 +86,7 @@ int lsh_exit(char **args, clients_t* aux){
       }
     }
   }
+  sem_post(&client_data_sem);
   sem_post(&empty_sem);
   return 0;
 }
@@ -92,28 +94,44 @@ int lsh_exit(char **args, clients_t* aux){
 int lsh_launch(char **args, clients_t* aux){
   chdir(aux->wdir);
   func=1;
+  int bg=0;
   pid_t pid;
   int status;
   if (pipe(aux->filedes) == -1) {
     perror("pipe");
     exit(1);
   }
+  int i=0;
+  while(args[i]!=NULL){
+    if(strcmp(args[i],"&")==0){
+      bg=1;
+      args[i]=NULL;
+      break;
+    }
+    i++;
+  }
   pid = fork();
   if (pid == 0) {  //child
     while ((dup2(aux->filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
     close(aux->filedes[0]);
     close(aux->filedes[1]);
-    if (execvp(args[0], args) == -1) {
+    if (execvp(args[0], args) != -1) {
       perror("lsh");
     }
     exit(EXIT_FAILURE);
   } else if (pid < 0) { //error
     perror("lsh");
   } else { //parent
-    close(aux->filedes[1]);
-    /*do {
-      waitpid(pid, &status, WUNTRACED);
-    } while (!WIFEXITED(status) && !WIFSIGNALED(status));*/
+    do {
+      close(aux->filedes[1]);
+      if(bg==0){
+        waitpid(pid, &status, WUNTRACED);
+      }
+      else{
+        func=0;
+      }
+      printf("after wait\n");
+    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
   sem_post(&empty_sem);
   return 1;
@@ -157,6 +175,7 @@ char **lsh_split_line(char *line){
     token = strtok(NULL, LSH_TOK_DELIM);
   }
   tokens[position] = NULL;
+  //print_args(tokens);
   return tokens;
 }
 
@@ -179,17 +198,20 @@ void pipe_to_buff(clients_t* aux){
 }
 
 struct client_t* clients_func(struct lws* wsi){
+  sem_wait(&client_data_sem);
   clients_t* aux = clients;
   if( clients == NULL){
     clients = (clients_t*)calloc(1,sizeof(clients_t));
     clients -> client = wsi;
     clients -> next = NULL;
     strcpy(clients -> wdir, cdir);
+    sem_post(&client_data_sem);
     return clients;
   }
   else{
     while((aux-> next)!=NULL){
       if((aux->client)==wsi){
+        sem_post(&client_data_sem);
         return aux;
       }
       aux=aux->next;
@@ -199,6 +221,7 @@ struct client_t* clients_func(struct lws* wsi){
     aux -> client = wsi;
     aux -> next =NULL;
     strcpy(aux -> wdir, cdir);
+    sem_post(&client_data_sem);
     return aux;
   }
 }
@@ -224,9 +247,7 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 }
 
 static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
-  sem_wait(&client_data_sem);
   clients_t* aux = clients_func(wsi);
-  sem_post(&client_data_sem);
   switch( reason ){
 		case LWS_CALLBACK_ESTABLISHED:{
 	    printf("connection established\n");
@@ -252,9 +273,7 @@ static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, 
       sem_post(&empty_sem);
 			break;}
 		case LWS_CALLBACK_CLOSED: {
-      sem_wait(&client_data_sem);
       lsh_exit(NULL,aux);
-      sem_post(&client_data_sem);
 	    printf("connection closed \n");
 	  break;}
 		default:
