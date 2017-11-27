@@ -2,23 +2,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-#include <unistd.h>
+#include <unistd.h> //per cambiare direct
 #include <pthread.h> //for threading , link with lpthread
 #include <semaphore.h>
 #include <libwebsockets.h>
 
 #define LSH_TOK_BUFSIZE 64
 #define LSH_TOK_DELIM " \t\r\n\a"
-#define OUT_BUFFER_SIZE 1024
-#define IN_BUFFER_SIZE 1024
+#define OUT_BUFFER_SIZE LWS_SEND_BUFFER_PRE_PADDING + 1024 + LWS_SEND_BUFFER_POST_PADDING
+#define IN_BUFFER_SIZE LWS_SEND_BUFFER_PRE_PADDING + 1024 + LWS_SEND_BUFFER_POST_PADDING
 #define CLIENT_NUM 24
 
-typedef struct clients_s {
+typedef struct {
   struct lws* client;
   char inbuf[IN_BUFFER_SIZE];
   char outbuf[OUT_BUFFER_SIZE];
   int filedes[2];
-  struct  clients_t* next;
+  struct clients_t* next;
 } clients_t;
 
 char *builtin_str[]={"cd","help","exit"};
@@ -64,7 +64,7 @@ int lsh_help(char **args, clients_t* aux){
   return 1;
 }
 
-int lsh_exit(char **args, clients_t* aux){ //incompleta (invece di chiudere il programma ristrutturare la lista)
+int lsh_exit(char **args, clients_t* aux){
   clients_t* aus = clients;
   clients_t* aus2 = clients;
   if(clients->client==aux->client){
@@ -187,7 +187,6 @@ struct client_t* clients_func(struct lws* wsi){
     clients = (clients_t*)calloc(1,sizeof(clients_t));
     clients -> client = wsi;
     clients -> next =NULL;
-    strcpy((clients->outbuf),"Welcome to websocket terminal\0");
     return clients;
   }
   else{
@@ -201,13 +200,11 @@ struct client_t* clients_func(struct lws* wsi){
     aux=aux->next;
     aux -> client = wsi;
     aux -> next =NULL;
-    strcpy((clients->outbuf),"Welcome to websocket terminal\0");
     return aux;
   }
 }
 
 void thread_func(void* args) {
-  //session_thread_args_t* arg = (session_thread_args_t*)args;
   printf("thread\n");
   clients_t* aux = (clients_t*)args;
   char ** tmp = lsh_split_line(aux->inbuf);
@@ -228,38 +225,38 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 }
 
 static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
-  //sem_wait(&client_data_sem);
+  sem_wait(&client_data_sem);
   clients_t* aux = clients_func(wsi);
-  //sem_post(&client_data_sem);
+  printf("callback\n");
+  sem_post(&client_data_sem);
   switch( reason ){
 		case LWS_CALLBACK_ESTABLISHED:{
 	    printf("connection established\n");
+      strcpy((aux->outbuf),"Welcome to websocket terminal\0");
 			lws_callback_on_writable( wsi );
 	    break;}
 		case LWS_CALLBACK_RECEIVE:
       sem_wait(&empty_sem);
-			printf("received data: %s size %d \n", (unsigned char *)(in), (int) len);
+			printf("received data: %s\n", (unsigned char *)(in));
 			strcpy((aux->inbuf),(char *)(in));
 			strcat((aux->inbuf),"\0");
       pthread_t thread;
-      printf("before create\n");
       pthread_create(&thread, NULL, thread_func, (void*)aux);
       pthread_detach(thread);
 			lws_callback_on_writable( wsi );
 			break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:{
-      printf("wait\n");
       sem_wait(&empty_sem);
       if(func==1) pipe_to_buff(aux);
-      printf("%s\n", aux->outbuf);
-			printf("send outbuf: %s\n", aux->outbuf);
-			lws_write( aux->client, aux->outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT ); //add LWS_PRE to buffer
+    	printf("send outbuf: %s\n", aux->outbuf);
+			lws_write( aux->client, aux->outbuf, OUT_BUFFER_SIZE, LWS_WRITE_TEXT );
 			memset(aux->outbuf, 0, OUT_BUFFER_SIZE);
-      printf("post\n");
       sem_post(&empty_sem);
 			break;}
 		case LWS_CALLBACK_CLOSED: {
+      sem_wait(&client_data_sem);
       lsh_exit(NULL,aux);
+      sem_post(&client_data_sem);
 	    printf("connection closed \n");
 	  break;}
 		default:
