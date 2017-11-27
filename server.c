@@ -19,6 +19,7 @@ typedef struct {
   char inbuf[IN_BUFFER_SIZE];
   char outbuf[OUT_BUFFER_SIZE];
   int filedes[2];
+  char wdir[DIR_BUFFER_SIZE];
   struct clients_t* next;
 } clients_t;
 
@@ -40,12 +41,14 @@ int lsh_num_builtins(){
 }
 
 int lsh_cd(char **args, clients_t* aux){
-  printf("cd function\n");
   if (args[1] == NULL) {
     strcpy(aux->outbuf,"lsh: expected argument to \"cd\"\n");
   }
 	else{
-    if (chdir(args[1]) != 0) {
+    if (chdir(args[1]) == 0) {
+      strcpy(aux->wdir,args[1]);
+    }
+    else{
       strcpy(aux->outbuf,"No such file or directory");
     }
   }
@@ -87,6 +90,7 @@ int lsh_exit(char **args, clients_t* aux){
 }
 
 int lsh_launch(char **args, clients_t* aux){
+  chdir(aux->wdir);
   func=1;
   pid_t pid;
   int status;
@@ -106,10 +110,10 @@ int lsh_launch(char **args, clients_t* aux){
   } else if (pid < 0) { //error
     perror("lsh");
   } else { //parent
-    do {
-      close(aux->filedes[1]);
-      //waitpid(pid, &status, WUNTRACED);
-    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+    close(aux->filedes[1]);
+    /*do {
+      waitpid(pid, &status, WUNTRACED);
+    } while (!WIFEXITED(status) && !WIFSIGNALED(status));*/
   }
   sem_post(&empty_sem);
   return 1;
@@ -179,7 +183,8 @@ struct client_t* clients_func(struct lws* wsi){
   if( clients == NULL){
     clients = (clients_t*)calloc(1,sizeof(clients_t));
     clients -> client = wsi;
-    clients -> next =NULL;
+    clients -> next = NULL;
+    strcpy(clients -> wdir, cdir);
     return clients;
   }
   else{
@@ -193,6 +198,7 @@ struct client_t* clients_func(struct lws* wsi){
     aux=aux->next;
     aux -> client = wsi;
     aux -> next =NULL;
+    strcpy(aux -> wdir, cdir);
     return aux;
   }
 }
@@ -220,7 +226,6 @@ static int callback_http( struct lws *wsi, enum lws_callback_reasons reason, voi
 static int callback_example( struct lws* wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len ){
   sem_wait(&client_data_sem);
   clients_t* aux = clients_func(wsi);
-  printf("callback\n");
   sem_post(&client_data_sem);
   switch( reason ){
 		case LWS_CALLBACK_ESTABLISHED:{
