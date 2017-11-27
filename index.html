@@ -12,12 +12,19 @@
 				function send(){
 					socket.send(document.getElementById('testo').value);
 				}
+        function pressed(e) {
+            // Has the enter key been pressed?
+            if ( (window.event ? event.keyCode : e.which) == 13) {
+                // If it has been so, manually submit the <form>
+                send();
+            }
+        }
         </script>
     </head>
     <body>
 	  Write command<br/>
      <tr>
-		  <td> <input type="text" id="testo"></td>
+		  <td> <input type="text" id="testo" onkeydown="pressed(event)"></td>
 		  <td> <button type="button" onclick="send()">Send</button></td>
 		</tr>
     <p>Response</p>
