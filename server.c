@@ -36,6 +36,14 @@ int lsh_exit(char **args, clients_t* aux);
 
 int (*builtin_func[])(char **,clients_t*)={&lsh_cd,&lsh_help,&lsh_exit};
 
+void print_args(char** args){
+  int i=0;
+  while(args[i]!=NULL){
+    printf("s=%s\n", args[i]);
+    i++;
+  }
+}
+
 int lsh_num_builtins(){
   return sizeof(builtin_str) / sizeof(char *);
 }
@@ -47,6 +55,7 @@ int lsh_cd(char **args, clients_t* aux){
 	else{
     if (chdir(args[1]) == 0) {
       strcpy(aux->wdir,args[1]);
+      strcpy(aux->outbuf,"Success!");
     }
     else{
       strcpy(aux->outbuf,"No such file or directory");
@@ -130,7 +139,6 @@ int lsh_launch(char **args, clients_t* aux){
       else{
         func=0;
       }
-      printf("after wait\n");
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
   sem_post(&empty_sem);
